@@ -483,7 +483,6 @@ int fs_close(int fd) {
     memset(fd_table[fd].filename, 0, sizeof(char));
     fd_table[fd].offset = 0;
     fd_table[fd].used = false;
-    print_fd();
 
     fd_open_count--;
 
