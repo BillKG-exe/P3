@@ -212,8 +212,9 @@ int fs_umount(void) {
 /* Get number of avalaible FAT indexes */
 int get_free_fat() {
     int free_fat = 0;
+    int fat_size = file_system->sp.fat_blck_amount == 1? file_system->sp.data_blck_amount : FAT_ARR_SIZE;
     for(int r = 0; r < file_system->sp.fat_blck_amount; r++) {
-        for(int c = 0; c < FAT_ARR_SIZE; c++) {
+        for(int c = 0; c < fat_size; c++) {
             if(file_system->fat_blocks[r].arr[c] == 0) {
                 free_fat++;
             }
@@ -247,11 +248,10 @@ int fs_info(void) {
 
     printf("total_blk_count=%d\n", file_system->sp.dsk_blck_amount);
 
-    unsigned fatBytes = file_system->sp.data_blck_amount * 2;
-    printf("fat_blk_count=%d\n", fatBytes / BLOCK_SIZE);
+    printf("fat_blk_count=%d\n", file_system->sp.fat_blck_amount);
 
     printf("rdir_blk=%d\n", file_system->sp.root_dir_index);
-    printf("data_blk%d\n", file_system->sp.data_blck_index);
+    printf("data_blk=%d\n", file_system->sp.data_blck_index);
 
     printf("data_blk_count=%d\n", file_system->sp.data_blck_amount);
 
@@ -740,5 +740,5 @@ int fs_read(int fd, void *buf, size_t count) {
         fd_offset += size_read;
         fd_table[fd].offset = fd_offset;
     }
-    return 0;
+    return buf_offset;
 }
