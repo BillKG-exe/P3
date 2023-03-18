@@ -82,19 +82,16 @@ unsigned fd_open_count = 0;
 
 const char SIG[SIGNATURE_MAX] = "ECS150FS";
 
-void print_fd(void) {
-    for(int i = 0; i < FILE_DESCRIPTOR_TABLE_SIZE; i++) {
-        printf("fd: %-3d filename: %-17s offset: %-17lu used: %d\n", i, fd_table[i].filename, fd_table[i].offset, fd_table[i].used);
-    }
-}
-
 // Verify super block data from mount function
 int sys_error_check() {
     uint8_t character;
     /* Check if file signature matches the diskname */
     for (int i = 0; i < SIGNATURE_MAX; i++) {
         character = file_system->sp.signature >> (SIGNATURE_MAX * i) & 0xFF;
-        if((char)character != SIG[i]) return -1;
+        if((char)character != SIG[i]) {
+                //printf("Signature error\n");
+                return -1;
+        }
     }
     /* Compare calculated disk block count to super block disk block count */
     int disk_blocks = block_disk_count();
@@ -105,6 +102,9 @@ int sys_error_check() {
 
     /* Compare calculated fat block count to super block fat block count */
     int disk_fat_count = disk_blocks * 2 / BLOCK_SIZE;
+
+    if(disk_fat_count < BLOCK_SIZE) disk_fat_count = 1;
+
     if (disk_fat_count != file_system->sp.fat_blck_amount) {
         //fprintf(stderr, "Error: FAT Length is invalid\n");
         return -1;
@@ -135,16 +135,6 @@ int sys_error_check() {
     return 0;
 }
 
-
-void print_fat_arr() {
-        printf("Number of fat_block is: %d with size: %lu\n", file_system->sp.fat_blck_amount, sizeof(file_system->fat_blocks[0]));
-        for(int i = 0; i < 1 /*file_system->sp.fat_blck_amount*/; i++) {
-                for(int j = 0; j < 2048/4; j++) {
-                        printf("fat_arr[%d][%d] = %u\n", i, j, file_system->fat_blocks[i].arr[j]);
-                }
-        }
-}
-
 /** Open virtual disk and load metadata information **/
 int fs_mount(const char *diskname) {
     /* TODO: Phase 1 */
@@ -152,12 +142,14 @@ int fs_mount(const char *diskname) {
     // Verify valid disk name length
     int diskNameLen = strlen(diskname);
     if ((SIGNATURE_MAX < diskNameLen) || (!diskNameLen)) {
+        //printf("disklen err\n");
         return -1;
     }
 
     // Attempt to open disk
     int success = !block_disk_open(diskname);
     if (!success) {
+        //printf("failed to open disk\n");
         return -1;
     }
 
@@ -169,19 +161,17 @@ int fs_mount(const char *diskname) {
 
     // Verify super block data
     if (sys_error_check()){
+    	//printf("system check err\n");
         return -1;
     }
 
     /* Create the FAT array with the corresponding size of elements */
     file_system->fat_blocks = (struct fat_array*)malloc(file_system->sp.fat_blck_amount * sizeof(struct fat_array));
-    /* Go through the FAT blocks and store the data in the FAT array */
+    
+	/* Go through the FAT blocks and store the data in the FAT array */
     for (int i = 1; i < file_system->sp.fat_blck_amount + 1; i++) {
-        //file_system->fat_blocks[i-1] = (uint16_t*)malloc(FAT_ARR_SIZE * sizeof(uint16_t));
         block_read(i, &file_system->fat_blocks[i - 1]);
-        //print_fat_arr();
     }
-
-    //print_fd();
 
     // Read root directory block and write into root_entries
     // There the root directory is one block big. No for loop needed
@@ -202,14 +192,15 @@ int fs_umount(void) {
     // Persistent Storage - Write all FAT data out to the disk
     //Shouldn't i be 1 instead of 2?
     for (int i = FAT_INDEX; i < file_system->sp.fat_blck_amount + 1; i++) {
+        printf("sizeof arr = %lu\n", sizeof(file_system->fat_blocks[i - FAT_INDEX]));
         block_write(i, &file_system->fat_blocks[i - FAT_INDEX]);
     }
     // Persistent Storage - Write all root directory data out to the disk
     block_write(file_system->sp.root_dir_index, &file_system->root_dir);
     // Clean internal data structures - Deallocate memory
-    //free(file_system->fat_blocks->arr);
-    //free(file_system->fat_blocks);
-    //free(file_system);
+    free(file_system->fat_blocks);
+    free(file_system);
+   
     // Close virtual disk
     int success = !block_disk_close();
     if (!success) {
@@ -223,7 +214,6 @@ int get_free_fat() {
     int free_fat = 0;
     for(int r = 0; r < file_system->sp.fat_blck_amount; r++) {
         for(int c = 0; c < FAT_ARR_SIZE; c++) {
-
             if(file_system->fat_blocks[r].arr[c] == 0) {
                 free_fat++;
             }
@@ -446,10 +436,9 @@ int fs_open(const char *filename) {
 
     int fd = -1;
 
-    //print_fd();
-
+	/* 	Find the index of a free directory entry */
     for(int i = 0; i < FILE_DESCRIPTOR_TABLE_SIZE; i++) {
-        if(!fd_table[i].used) {
+        if(fd_table[i].used == 0) {
             strncpy(fd_table[i].filename, filename, strlen(filename));
             fd_table[i].offset = 0;
             fd_table[i].used = true;
@@ -457,8 +446,6 @@ int fs_open(const char *filename) {
             break;
         }
     }
-
-    //print_fd();
 
     if(fd == -1) return -1;
 
@@ -488,8 +475,6 @@ int isvalidFD(int fd) {
 
 int fs_close(int fd) {
     /* TODO: Phase 3 */
-    //free(file_system);
-    
     int isValid = !isvalidFD(fd);
 
     if(!isValid) return -1;
@@ -498,8 +483,7 @@ int fs_close(int fd) {
     memset(fd_table[fd].filename, 0, sizeof(char));
     fd_table[fd].offset = 0;
     fd_table[fd].used = false;
-    //print_fd();
-
+    print_fd();
 
     fd_open_count--;
 
@@ -536,11 +520,8 @@ int fs_lseek(int fd, size_t offset) {
         return -1;
     }
 
-    //print_fd();
-
     fd_table[fd].offset = offset;
 
-    //print_fd();
     return 0;
 }
 
@@ -588,6 +569,7 @@ int find_free_fat_index() {
     int block_index = -1;
     int arr_index = -1;
 
+	/* Find the first available fat entry */
     for(int i = 0; i < file_system->sp.fat_blck_amount; i++) {
         for(int c = 0; c < FAT_ARR_SIZE; c++) {
             if(file_system->fat_blocks[i].arr[c] == 0) {
@@ -597,11 +579,14 @@ int find_free_fat_index() {
             }
         }
 
+		/* Returns an error when none were found */
         if(i+1 == file_system->sp.fat_blck_amount) return -1;
     }
 
+	/* Update the entry found with the new data block index */
     file_system->fat_blocks[block_index].arr[arr_index] = block_index*FAT_ARR_SIZE + arr_index;
 
+	/* returns the index of the data block we want to write into */
     return block_index*FAT_ARR_SIZE + arr_index;
 }
 
@@ -609,6 +594,7 @@ int find_free_fat_index() {
 int fat_entry_end(int fd) {
     int index = -1;
 
+	/* Find the index of specific using the file descriptor */
     for(int i = 0; i < FS_FILE_MAX_COUNT; i++) {
         if(strcmp(fd_table[fd].filename, (char*)file_system->root_dir[i].filename) == 0) {
             index = file_system[i].root_dir[i].file_first_index;
@@ -619,6 +605,9 @@ int fat_entry_end(int fd) {
 
     int prev_index = -1;
 
+	/* go through the linked list of fat indexes 
+		save the index preceding the FAT_EOC
+	 */
     while(index != FAT_EOC) {
         int fat_blk_index = get_fat_blck_index(index);
         prev_index = index;
@@ -627,9 +616,13 @@ int fat_entry_end(int fd) {
 
     if(prev_index == -1) return -1;
 
+	/* Find a new entry in the fat table and assign it to FAT_EOC to set end of
+	file */
     int free_fat = get_free_fat();
     file_system->fat_blocks[free_fat/BLOCK_SIZE].arr[free_fat%BLOCK_SIZE] = FAT_EOC;
 
+	/* Return index at which data can be written with index of end of file
+	updated  */
     return prev_index;
 }
 
@@ -654,9 +647,11 @@ int fs_write(int fd, void *buf, size_t count) {
 
     int data_block_index = get_data_blck_index(fd, fd_table[fd].offset);
 
+	/* If no data was written */
+	// Find a free entry in fat table
     if(data_block_index == FAT_EOC) {
         data_block_index = find_free_fat_index();
-        
+
         if(data_block_index == -1) return -1;
 
         memset(bouncer, 0, sizeof(char));
@@ -670,27 +665,31 @@ int fs_write(int fd, void *buf, size_t count) {
 
     for (int i = 0; i < block_count; i++) {
         block_read(data_block_index, bouncer);
+
+		//Calculate the starting offset of the bouncer 
         bouncer_offset += fd_offset % BLOCK_SIZE;
 
-        size_write = BLOCK_SIZE*(i+1) - fd_offset; //BLOCK_SIZE - bouncer_offset;
+		//size of data to write
+        size_write = BLOCK_SIZE*(i+1) - fd_offset; 
 
         memcpy(bouncer+bouncer_offset, buf+buf_offset, size_write);
-        
+
+		//Update the different offsets
         fd_offset += size_write;
         buf_offset += size_write;
         bouncer_offset = 0;
 
+		//If end of file is reached find new free fat entry and store data
         if(data_block_index == FAT_EOC) {
             data_block_index = fat_entry_end(fd);
             if(data_block_index == -1) return -1;
-            
+
             char clean_data[BLOCK_SIZE];
             memset(clean_data, 0, sizeof(char));
             block_write(data_block_index, clean_data);
         }
 
         block_write(data_block_index, bouncer);
-        //memset(bouncer, 0, sizeof(char));
     }
     return 0;
 }
@@ -703,11 +702,9 @@ int fs_read(int fd, void *buf, size_t count) {
 
     if(!isValid_fd || buf == NULL) return -1;
 
-    //print_fat_arr();
 
     /* Calculates the number of data blocks that the buffer can span */
     int block_count = (int)((fd_table[fd].offset + count) / BLOCK_SIZE);
-        //printf("count = %lu, length = %f\n", count, length);
     block_count = (fd_table[fd].offset + count) % BLOCK_SIZE == 0? block_count : block_count+1;
 
     char bouncer[BLOCK_SIZE];
